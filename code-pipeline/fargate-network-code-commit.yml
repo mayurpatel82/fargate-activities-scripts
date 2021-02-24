@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: The CloudFormation template for the Activities CodePipeline to deploy Infrastructure.
+
+Metadata:
+  Input:
+    Description: ResourcePrefix
+  VersionDate: "2017-08-21"
+  Stack: 1
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Parameters:
+          - ResourcePrefix
+        Label:
+          default: "Tagging Values"
+      - Parameters:
+          - CodeCommitRepo
+          - CodeCommitBranch
+        Label:
+          default: "Github Source Configuration"
+      - Parameters:
+          - Environment
+          - Application
+        Label:
+          default: "Application configuration"
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: mp
+    Description: "Resource Prefix used for tagging and exporting stack outputs"
+  CodeCommitRepo:
+    Type: String
+    Default: fargate-activities-scripts
+    Description: The repository name on where the application code is (fargate-activities-scripts).
+  CodeCommitBranch:
+    Type: String
+    Default: main
+    Description: The branch name that will be deployed (fargate-activities-scripts).
+  Application:
+    Type: String
+    Default: Activities
+    Description: "Application Name"
+  Environment:
+    Type: String
+    Default: Production
+    Description: "Environment Name"
+
+Resources:
+
+  PipelineArtifacts:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+    
+  CodePipeLineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourcePrefix}-CodePipeLineExecutionRole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: "sts:AssumeRole"
+            Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+        Version: "2012-10-17"
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${ResourcePrefix}-CodePipeline-ExecutionRole-Infrastructure
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Action:
+                  - "s3:*"
+                  - "codebuild:*"
+                  - "cloudformation:CreateStack"
+                  - "cloudformation:DescribeStacks"
+                  - "cloudformation:DeleteStack"
+                  - "cloudformation:UpdateStack"
+                  - "cloudformation:CreateChangeSet"
+                  - "cloudformation:ExecuteChangeSet"
+                  - "cloudformation:DeleteChangeSet"
+                  - "cloudformation:DescribeChangeSet"
+                  - "cloudformation:SetStackPolicy"
+                  - "iam:PassRole"
+                  - "sns:Publish"
+                  - "ssm:*"
+                  - "codecommit:*"
+                Effect: Allow
+                Resource: "*"
+
+  CloudformationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ResourcePrefix}-CloudformationExecutionRole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${ResourcePrefix}-CloudFormation-Execution-Role-Infrastructure
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Resource: "*"
+                Action:
+                  - "ecs:*"
+                  - "cloudformation:*"
+                  - "s3:*"
+                  - "elasticache:*"
+                  - "elasticloadbalancing:*"
+                  - "rds:*"
+                  - "events:*"
+                  - "lambda:*"
+                  - "wafv2:*"
+                  - "logs:*"
+                  - "secretsmanager:*"
+                  - "ec2:*"
+                  - "vpc:*"
+                  - "apigateway:*"
+                  - "ssm:*"
+                  - "codecommit:*"
+              - Effect: Allow
+                Resource: "*"
+                Action:
+                  - "iam:GetRole"
+                  - "iam:PassRole"
+                  - "iam:DeleteRole"
+                  - "iam:CreateRole"
+                  - "iam:GetRolePolicy"
+                  - "iam:PutRolePolicy"
+                  - "iam:DeleteRolePolicy"
+                  - "iam:CreateServiceLinkedRole"
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: PipelineArtifacts
+    Properties:
+      Name: !Sub ${ResourcePrefix}-pipeline
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifacts
+      RoleArn: !GetAtt [CodePipeLineExecutionRole, Arn]
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: !Sub ${ResourcePrefix}-CheckoutSource
+              InputArtifacts: []
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                BranchName: !Ref CodeCommitBranch
+                RepositoryName: !Ref CodeCommitRepo
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: CheckoutSource
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: !Sub ${ResourcePrefix}-CreateStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: 1
+              InputArtifacts:
+                - Name: CheckoutSource
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt [CloudformationExecutionRole, Arn]
+                StackName: !Sub ${ResourcePrefix}-Stack
+                TemplatePath: "CheckoutSource::public-vpc-cluster.yml"
+              RunOrder: 1
