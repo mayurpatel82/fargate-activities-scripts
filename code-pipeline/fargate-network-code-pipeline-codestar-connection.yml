@@ -42,7 +42,7 @@ Parameters:
   StackName:
     Type: String
     Default: Infra
-    Description: "Application Name"
+    Description: "Stack Name"
 
 Resources:
 
